@@ -50,10 +50,10 @@ from oslo_utils import uuidutils
 from osprofiler import profiler
 import six
 from taskflow import exceptions as tfe
-from tooz import coordination
 
 from cinder import compute
 from cinder import context
+from cinder import coordination
 from cinder import exception
 from cinder import flow_utils
 from cinder.i18n import _, _LE, _LI, _LW
