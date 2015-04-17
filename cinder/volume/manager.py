@@ -50,6 +50,7 @@ from oslo_utils import uuidutils
 from osprofiler import profiler
 import six
 from taskflow import exceptions as tfe
+from tooz import coordination
 
 from cinder import compute
 from cinder import context
@@ -69,6 +70,7 @@ from cinder.volume import utils as vol_utils
 from cinder.volume import volume_types
 
 from eventlet import greenpool
+import threading
 
 LOG = logging.getLogger(__name__)
 
@@ -132,10 +134,17 @@ def locked_volume_operation(f):
     volume e.g. delete VolA while create volume VolB from VolA is in progress.
     """
     def lvo_inner1(inst, context, volume_id, **kwargs):
-        @utils.synchronized("%s-%s" % (volume_id, f.__name__), external=True)
-        def lvo_inner2(*_args, **_kwargs):
-            return f(*_args, **_kwargs)
-        return lvo_inner2(inst, context, volume_id, **kwargs)
+        #from pudb import set_trace; set_trace()
+        def a(n):
+            lock = inst.coordinator.get_lock("{}-{}".format(volume_id, f.__name__))
+            with lock:
+                print '-'*30, n, 'locked'
+                ret = f(inst, context, volume_id, **kwargs)
+            return ret
+        print '>> 1'
+        threading.Thread(target=a, args=(1,)).start()
+        print '>> 2'
+        threading.Thread(target=a, args=(2,)).start()
     return lvo_inner1
 
 
@@ -219,6 +228,7 @@ class VolumeManager(manager.SchedulerDependentManager):
             is_vol_db_empty=vol_db_empty)
 
         self.driver = profiler.trace_cls("driver")(self.driver)
+        self.coordinator = None
         try:
             self.extra_capabilities = jsonutils.loads(
                 self.driver.configuration.extra_capabilities)
@@ -228,6 +238,10 @@ class VolumeManager(manager.SchedulerDependentManager):
             with excutils.save_and_reraise_exception():
                 LOG.error("Invalid JSON: %s" %
                           self.driver.configuration.extra_capabilities)
+
+    #@periodic_task.periodic_task(spacing=1, run_immediately=True)
+    def heartbeat(self, context):
+        self.coordinator.heartbeat()
 
     def _add_to_threadpool(self, func, *args, **kwargs):
         self._tp.spawn_n(func, *args, **kwargs)
@@ -309,6 +323,19 @@ class VolumeManager(manager.SchedulerDependentManager):
             # we don't want to continue since we failed
             # to initialize the driver correctly.
             return
+
+        host = 'redis://192.168.42.11'
+        appid = 'blue-ctrl'
+        self.coordinator = coordination.get_coordinator(host, appid)
+        self.coordinator.start()
+        #self.add_periodic_task(self.heartbeat)
+        def f():
+            while True:
+                #LOG.debug('>>hearbeat<<')
+                self.heartbeat(None)
+                time.sleep(5)
+        #self._add_to_threadpool(f)
+        threading.Thread(target=f).start()
 
         volumes = self.db.volume_get_all_by_host(ctxt, self.host)
         # FIXME volume count for exporting is wrong
