@@ -134,17 +134,10 @@ def locked_volume_operation(f):
     volume e.g. delete VolA while create volume VolB from VolA is in progress.
     """
     def lvo_inner1(inst, context, volume_id, **kwargs):
-        #from pudb import set_trace; set_trace()
-        def a(n):
-            lock = inst.coordinator.get_lock("{}-{}".format(volume_id, f.__name__))
-            with lock:
-                print '-'*30, n, 'locked'
-                ret = f(inst, context, volume_id, **kwargs)
-            return ret
-        print '>> 1'
-        threading.Thread(target=a, args=(1,)).start()
-        print '>> 2'
-        threading.Thread(target=a, args=(2,)).start()
+        lock = inst.coordinator.get_lock("{}-{}".format(volume_id, f.__name__))
+        with lock:
+            ret = f(inst, context, volume_id, **kwargs)
+        return ret
     return lvo_inner1
 
 
