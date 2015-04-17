@@ -120,6 +120,7 @@ MAPPING = {
     'cinder.volume.drivers.fujitsu.eternus_dx_iscsi.FJDXISCSIDriver', }
 
 
+# TODO: remove decorators
 def locked_volume_operation(f):
     """Lock decorator for volume operations.
 
@@ -136,11 +137,11 @@ def locked_volume_operation(f):
     def lvo_inner1(inst, context, volume_id, **kwargs):
         lock = inst.coordinator.get_lock("{}-{}".format(volume_id, f.__name__))
         with lock:
-            ret = f(inst, context, volume_id, **kwargs)
-        return ret
+            return f(inst, context, volume_id, **kwargs)
     return lvo_inner1
 
 
+# TODO: remove decorators
 def locked_detach_operation(f):
     """Lock decorator for volume detach operations.
 
@@ -153,13 +154,13 @@ def locked_detach_operation(f):
     attachment_id in the parameter list.
     """
     def ldo_inner1(inst, context, volume_id, attachment_id=None, **kwargs):
-        @utils.synchronized("%s-%s" % (volume_id, f.__name__), external=True)
-        def ldo_inner2(*_args, **_kwargs):
-            return f(*_args, **_kwargs)
-        return ldo_inner2(inst, context, volume_id, attachment_id, **kwargs)
+        lock = inst.coordinator.get_lock("{}-{}".format(volume_id, f.__name__))
+        with lock:
+            return f(inst, context, volume_id, attachment_id, **kwargs)
     return ldo_inner1
 
 
+# TODO: remove decorators
 def locked_snapshot_operation(f):
     """Lock decorator for snapshot operations.
 
@@ -175,10 +176,9 @@ def locked_snapshot_operation(f):
     progress.
     """
     def lso_inner1(inst, context, snapshot, **kwargs):
-        @utils.synchronized("%s-%s" % (snapshot.id, f.__name__), external=True)
-        def lso_inner2(*_args, **_kwargs):
-            return f(*_args, **_kwargs)
-        return lso_inner2(inst, context, snapshot, **kwargs)
+        lock = inst.coordinator.get_lock("{}-{}".format(snapshot.id, f.__name__))
+        with lock:
+            return f(inst, context, snapshot, **kwargs)
     return lso_inner1
 
 
@@ -317,8 +317,8 @@ class VolumeManager(manager.SchedulerDependentManager):
             # to initialize the driver correctly.
             return
 
-        host = 'redis://192.168.42.11'
-        appid = 'blue-ctrl'
+        host = 'redis://192.168.42.11'  # TODO: remove
+        appid = 'blue-ctrl'  # TODO: remove
         self.coordinator = coordination.get_coordinator(host, appid)
         self.coordinator.start()
         #self.add_periodic_task(self.heartbeat)
