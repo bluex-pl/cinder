@@ -26,8 +26,24 @@ OPTS = [
 cfg.CONF.register_opts(OPTS, group='coordination')
 
 
-class Lock(tooz.locking.lock):
-    pass  # TODO
+class Lock(tooz.locking.Lock):
+    def __init__(self, lock):
+        self._lock = lock
+
+    def acquire(self, blocking=True):
+        try:
+            return self._lock.acquire(blocking)
+        except tooz.coordination.ToozError:
+            LOG.exception(_LE('Error while acquiring lock.'))
+
+    def release(self):
+        try:
+            return self._lock.release()
+        except tooz.coordination.ToozError:
+            LOG.exception(_LE('Error while releasing lock.'))
+
+    def __getattr__(self, name):
+        return getattr(self._lock, name)
 
 
 class Coordinator(object):
@@ -70,10 +86,13 @@ class Coordinator(object):
                 # re-connect
                 self.start()
             try:
+                #if self._coordinator._acquired_locks:
+                    #from pudb import set_trace; set_trace()
+                    #import rpdb; rpdb.set_trace()
                 self._coordinator.heartbeat()
             except tooz.coordination.ToozError:
                 LOG.exception(_LE('Error sending a heartbeat to coordination '
                                   'backend.'))
 
     def get_lock(self, name):
-        return self._coordinator.get_lock(name)  # TODO: wrap in custom Lock
+        return Lock(self._coordinator.get_lock(name))

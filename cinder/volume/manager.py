@@ -221,7 +221,7 @@ class VolumeManager(manager.SchedulerDependentManager):
             is_vol_db_empty=vol_db_empty)
 
         self.driver = profiler.trace_cls("driver")(self.driver)
-        self.coordinator = None
+        self.coordinator = coordination.Coordinator()
         try:
             self.extra_capabilities = jsonutils.loads(
                 self.driver.configuration.extra_capabilities)
@@ -317,16 +317,13 @@ class VolumeManager(manager.SchedulerDependentManager):
             # to initialize the driver correctly.
             return
 
-        host = 'redis://192.168.42.11'  # TODO: remove
-        appid = 'blue-ctrl'  # TODO: remove
-        self.coordinator = coordination.get_coordinator(host, appid)
         self.coordinator.start()
         #self.add_periodic_task(self.heartbeat)
         def f():
             while True:
-                #LOG.debug('>>hearbeat<<')
+                LOG.debug('>>hearbeat<<')
                 self.heartbeat(None)
-                time.sleep(5)
+                time.sleep(cfg.CONF.coordination.heartbeat)
         #self._add_to_threadpool(f)
         threading.Thread(target=f).start()
 
