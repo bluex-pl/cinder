@@ -60,6 +60,7 @@ from cinder.i18n import _, _LE, _LI, _LW
 from cinder.image import glance
 from cinder import manager
 from cinder.openstack.common import periodic_task
+from cinder.openstack.common import threadgroup
 from cinder import quota
 from cinder import utils
 from cinder.volume import configuration as config
@@ -198,6 +199,7 @@ class VolumeManager(manager.SchedulerDependentManager):
         self.configuration = config.Configuration(volume_manager_opts,
                                                   config_group=service_name)
         self._tp = greenpool.GreenPool()
+        self.tg = threadgroup.ThreadGroup()
         self.stats = {}
 
         if not volume_driver:
@@ -231,10 +233,6 @@ class VolumeManager(manager.SchedulerDependentManager):
             with excutils.save_and_reraise_exception():
                 LOG.error("Invalid JSON: %s" %
                           self.driver.configuration.extra_capabilities)
-
-    #@periodic_task.periodic_task(spacing=1, run_immediately=True)
-    def heartbeat(self, context):
-        self.coordinator.heartbeat()
 
     def _add_to_threadpool(self, func, *args, **kwargs):
         self._tp.spawn_n(func, *args, **kwargs)
@@ -318,14 +316,8 @@ class VolumeManager(manager.SchedulerDependentManager):
             return
 
         self.coordinator.start()
-        #self.add_periodic_task(self.heartbeat)
-        def f():
-            while True:
-                LOG.debug('>>hearbeat<<')
-                self.heartbeat(None)
-                time.sleep(cfg.CONF.coordination.heartbeat)
-        #self._add_to_threadpool(f)
-        threading.Thread(target=f).start()
+        self.tg.add_timer(cfg.CONF.coordination.heartbeat,
+                          self.coordinator.heartbeat)
 
         volumes = self.db.volume_get_all_by_host(ctxt, self.host)
         # FIXME volume count for exporting is wrong

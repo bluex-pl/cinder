@@ -5,7 +5,7 @@ from oslo_log import log
 import tooz.coordination
 import tooz.locking
 
-from cinder.i18n import _LE, _LI
+from cinder.i18n import _LE, _LI, _LW
 
 LOG = log.getLogger(__name__)
 
@@ -14,8 +14,7 @@ OPTS = [
                default=None,
                help='The backend URL to use for distributed coordination. If '
                     'left empty, per-deployment central agent and per-host '
-                    'compute agent won\'t do workload '
-                    'partitioning and will only function correctly if a '
+                    'compute agent will only function correctly if a '
                     'single instance of that service is running.'),
     cfg.FloatOpt('heartbeat',
                  default=1.0,
@@ -64,6 +63,8 @@ class Coordinator(object):
             except tooz.coordination.ToozError:
                 self._started = False
                 LOG.exception(_LE('Error connecting to coordination backend.'))
+        else:
+            LOG.warning(_LW('Coordination backend not configured.'))
 
     def stop(self):
         if not self._coordinator:
@@ -86,13 +87,13 @@ class Coordinator(object):
                 # re-connect
                 self.start()
             try:
-                #if self._coordinator._acquired_locks:
-                    #from pudb import set_trace; set_trace()
-                    #import rpdb; rpdb.set_trace()
                 self._coordinator.heartbeat()
             except tooz.coordination.ToozError:
                 LOG.exception(_LE('Error sending a heartbeat to coordination '
                                   'backend.'))
 
     def get_lock(self, name):
-        return Lock(self._coordinator.get_lock(name))
+        if self._coordinator is None:
+            LOG.warning(_LW('Unable to create lock.'))
+        else:
+            return Lock(self._coordinator.get_lock(name))
