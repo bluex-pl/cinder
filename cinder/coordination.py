@@ -1,3 +1,4 @@
+from functools import wraps
 import uuid
 
 from oslo_config import cfg
@@ -47,18 +48,19 @@ class Lock(locking.Lock):
 
 
 class Coordinator(object):
-    def __init__(self, my_id=None):
-        self._coordinator = None
-        self._my_id = my_id or str(uuid.uuid4())
-        self._started = False
+    def __init__(self, my_id=None, prefix=None):
+        self.coordinator = None
+        self.my_id = my_id or str(uuid.uuid4())
+        self.started = False
+        self.prefix = prefix
 
     def is_active(self):
-        return self._coordinator is not None
+        return self.coordinator is not None
 
     def start(self):
-        if not self._started:
+        if not self.started:
             self._start()
-            if self._started:
+            if self.started:
                 eventlet.spawn_n(self._heartbeat)
 
     def _start(self):
@@ -67,45 +69,65 @@ class Coordinator(object):
             LOG.warning(_LW('Coordination backend not configured.'))
             return
         try:
-            self._coordinator = coordination.get_coordinator(
-                backend_url, self._my_id)
-            self._coordinator.start()
+            member_id = '-'.join(s for s in (
+                self.prefix,
+                self.my_id
+            ) if s)
+            self.coordinator = coordination.get_coordinator(
+                backend_url, member_id)
+            self.coordinator.start()
         except coordination.ToozError:
-            self._started = False
+            self.started = False
             LOG.exception(_LE('Error connecting to coordination backend.'))
         else:
-            self._started = True
+            self.started = True
             LOG.info(_LI('Coordination backend started successfully.'))
 
     def stop(self):
-        if not self._coordinator:
+        if not self.coordinator:
             return
 
-        coordinator, self._coordinator = self._coordinator, None
+        coordinator, self.coordinator = self.coordinator, None
         try:
             coordinator.stop()
         except coordination.ToozError:
             LOG.exception(_LE('Error connecting to coordination backend.'))
         finally:
-            self._started = False
+            self.started = False
 
     def _heartbeat(self):
-        while self._coordinator:
-            if not self._started:
+        while self.coordinator:
+            if not self.started:
                 # re-connect
                 self._start()
             try:
-                self._coordinator.heartbeat()
+                self.coordinator.heartbeat()
             except coordination.ToozError:
                 LOG.exception(_LE('Error sending a heartbeat to coordination '
                                   'backend.'))
             else:
                 eventlet.sleep(cfg.CONF.coordination.heartbeat)
 
-    def get_lock(self, name):
-        if self._coordinator is None:
-            LOG.warning(_LW('Unable to create lock.'))
+    def get_lock(self, name, external=False):
+        if self.coordinator is not None:
+            name = '-'.join(s for s in (
+                self.prefix,
+                not external and self.my_id,
+                name
+            ) if s)
+            return Lock(self.coordinator.get_lock(name))
         else:
-            return Lock(self._coordinator.get_lock(name))
+            LOG.warning(_LW('Unable to create lock.'))
 
-COORDINATOR = Coordinator()
+
+COORDINATOR = Coordinator(prefix='cinder')
+
+
+def lock(lock_name, external=False, coordinator=COORDINATOR):
+    def wrap(f):
+        @wraps(f)
+        def wrapped(*a, **k):
+            with coordinator.get_lock(lock_name, external):
+                return f(*a, **k)
+        return wrapped
+    return wrap
