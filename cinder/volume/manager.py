@@ -53,14 +53,13 @@ from taskflow import exceptions as tfe
 
 from cinder import compute
 from cinder import context
-from cinder import coordination
 from cinder import exception
 from cinder import flow_utils
+from cinder.coordination import COORDINATOR
 from cinder.i18n import _, _LE, _LI, _LW
 from cinder.image import glance
 from cinder import manager
 from cinder.openstack.common import periodic_task
-from cinder.openstack.common import threadgroup
 from cinder import quota
 from cinder import utils
 from cinder.volume import configuration as config
@@ -71,7 +70,6 @@ from cinder.volume import utils as vol_utils
 from cinder.volume import volume_types
 
 from eventlet import greenpool
-import threading
 
 LOG = logging.getLogger(__name__)
 
@@ -121,68 +119,6 @@ MAPPING = {
     'cinder.volume.drivers.fujitsu.eternus_dx_iscsi.FJDXISCSIDriver', }
 
 
-# TODO: remove decorators
-def locked_volume_operation(f):
-    """Lock decorator for volume operations.
-
-    Takes a named lock prior to executing the operation. The lock is named with
-    the operation executed and the id of the volume. This lock can then be used
-    by other operations to avoid operation conflicts on shared volumes.
-
-    Example use:
-
-    If a volume operation uses this decorator, it will block until the named
-    lock is free. This is used to protect concurrent operations on the same
-    volume e.g. delete VolA while create volume VolB from VolA is in progress.
-    """
-    def lvo_inner1(inst, context, volume_id, **kwargs):
-        lock = inst.coordinator.get_lock("{}-{}".format(volume_id, f.__name__))
-        with lock:
-            return f(inst, context, volume_id, **kwargs)
-    return lvo_inner1
-
-
-# TODO: remove decorators
-def locked_detach_operation(f):
-    """Lock decorator for volume detach operations.
-
-    Takes a named lock prior to executing the detach call.  The lock is named
-    with the operation executed and the id of the volume. This lock can then
-    be used by other operations to avoid operation conflicts on shared volumes.
-
-    This locking mechanism is only for detach calls.   We can't use the
-    locked_volume_operation, because detach requires an additional
-    attachment_id in the parameter list.
-    """
-    def ldo_inner1(inst, context, volume_id, attachment_id=None, **kwargs):
-        lock = inst.coordinator.get_lock("{}-{}".format(volume_id, f.__name__))
-        with lock:
-            return f(inst, context, volume_id, attachment_id, **kwargs)
-    return ldo_inner1
-
-
-# TODO: remove decorators
-def locked_snapshot_operation(f):
-    """Lock decorator for snapshot operations.
-
-    Takes a named lock prior to executing the operation. The lock is named with
-    the operation executed and the id of the snapshot. This lock can then be
-    used by other operations to avoid operation conflicts on shared snapshots.
-
-    Example use:
-
-    If a snapshot operation uses this decorator, it will block until the named
-    lock is free. This is used to protect concurrent operations on the same
-    snapshot e.g. delete SnapA while create volume VolA from SnapA is in
-    progress.
-    """
-    def lso_inner1(inst, context, snapshot, **kwargs):
-        lock = inst.coordinator.get_lock("{}-{}".format(snapshot.id, f.__name__))
-        with lock:
-            return f(inst, context, snapshot, **kwargs)
-    return lso_inner1
-
-
 class VolumeManager(manager.SchedulerDependentManager):
     """Manages attachable block storage devices."""
 
@@ -199,7 +135,6 @@ class VolumeManager(manager.SchedulerDependentManager):
         self.configuration = config.Configuration(volume_manager_opts,
                                                   config_group=service_name)
         self._tp = greenpool.GreenPool()
-        self.tg = threadgroup.ThreadGroup()
         self.stats = {}
 
         if not volume_driver:
@@ -223,7 +158,6 @@ class VolumeManager(manager.SchedulerDependentManager):
             is_vol_db_empty=vol_db_empty)
 
         self.driver = profiler.trace_cls("driver")(self.driver)
-        self.coordinator = coordination.Coordinator()
         try:
             self.extra_capabilities = jsonutils.loads(
                 self.driver.configuration.extra_capabilities)
@@ -315,9 +249,7 @@ class VolumeManager(manager.SchedulerDependentManager):
             # to initialize the driver correctly.
             return
 
-        self.coordinator.start()
-        self.tg.add_timer(cfg.CONF.coordination.heartbeat,
-                          self.coordinator.heartbeat)
+        COORDINATOR.start()
 
         volumes = self.db.volume_get_all_by_host(ctxt, self.host)
         # FIXME volume count for exporting is wrong
@@ -465,10 +397,6 @@ class VolumeManager(manager.SchedulerDependentManager):
             with flow_utils.DynamicLogListener(flow_engine, logger=LOG):
                 flow_engine.run()
 
-        @utils.synchronized(locked_action, external=True)
-        def _run_flow_locked():
-            _run_flow()
-
         # NOTE(dulek): Flag to indicate if volume was rescheduled. Used to
         # decide if allocated_capacity should be incremented.
         rescheduled = False
@@ -477,7 +405,8 @@ class VolumeManager(manager.SchedulerDependentManager):
             if locked_action is None:
                 _run_flow()
             else:
-                _run_flow_locked()
+                with COORDINATOR.get_lock(locked_action):
+                    _run_flow()
         except Exception as e:
             if hasattr(e, 'rescheduled'):
                 rescheduled = e.rescheduled
@@ -497,7 +426,6 @@ class VolumeManager(manager.SchedulerDependentManager):
         LOG.info(_LI("Created volume successfully."), resource=vol_ref)
         return vol_ref['id']
 
-    @locked_volume_operation
     def delete_volume(self, context, volume_id, unmanage_only=False):
         """Deletes and unexports volume.
 
@@ -513,116 +441,119 @@ class VolumeManager(manager.SchedulerDependentManager):
         3. Delete a migration destination volume
            If deleting the destination volume in a migration, we want to
            skip quotas but we need database updates for the volume.
-      """
+        """
 
-        context = context.elevated()
+        with COORDINATOR.get_lock("{}-delete_volume".format(volume_id)):
+            context = context.elevated()
 
-        try:
-            volume_ref = self.db.volume_get(context, volume_id)
-        except exception.VolumeNotFound:
-            # NOTE(thingee): It could be possible for a volume to
-            # be deleted when resuming deletes from init_host().
-            LOG.debug("Attempted delete of non-existent volume: %s",
-                      volume_id)
-            return True
+            try:
+                volume_ref = self.db.volume_get(context, volume_id)
+            except exception.VolumeNotFound:
+                # NOTE(thingee): It could be possible for a volume to
+                # be deleted when resuming deletes from init_host().
+                LOG.debug("Attempted delete of non-existent volume: %s",
+                          volume_id)
+                return True
 
-        if context.project_id != volume_ref['project_id']:
-            project_id = volume_ref['project_id']
-        else:
-            project_id = context.project_id
-
-        if volume_ref['attach_status'] == "attached":
-            # Volume is still attached, need to detach first
-            raise exception.VolumeAttached(volume_id=volume_id)
-        if (vol_utils.extract_host(volume_ref['host']) != self.host):
-            raise exception.InvalidVolume(
-                reason=_("volume is not local to this node"))
-
-        is_migrating = volume_ref['migration_status'] is not None
-        is_migrating_dest = (is_migrating and
-                             volume_ref['migration_status'].startswith(
-                                 'target:'))
-        self._notify_about_volume_usage(context, volume_ref, "delete.start")
-        try:
-            # NOTE(flaper87): Verify the driver is enabled
-            # before going forward. The exception will be caught
-            # and the volume status updated.
-            utils.require_driver_initialized(self.driver)
-
-            self.driver.remove_export(context, volume_ref)
-            if unmanage_only:
-                self.driver.unmanage(volume_ref)
+            if context.project_id != volume_ref['project_id']:
+                project_id = volume_ref['project_id']
             else:
-                self.driver.delete_volume(volume_ref)
-        except exception.VolumeIsBusy:
-            LOG.error(_LE("Unable to delete busy volume."),
-                      resource=volume_ref)
-            # If this is a destination volume, we have to clear the database
-            # record to avoid user confusion.
-            self._clear_db(context, is_migrating_dest, volume_ref,
-                           'available')
-            return True
-        except Exception:
-            with excutils.save_and_reraise_exception():
-                # If this is a destination volume, we have to clear the
-                # database record to avoid user confusion.
+                project_id = context.project_id
+
+            if volume_ref['attach_status'] == "attached":
+                # Volume is still attached, need to detach first
+                raise exception.VolumeAttached(volume_id=volume_id)
+            if vol_utils.extract_host(volume_ref['host']) != self.host:
+                raise exception.InvalidVolume(
+                    reason=_("volume is not local to this node"))
+
+            is_migrating = volume_ref['migration_status'] is not None
+            is_migrating_dest = (
+                is_migrating and
+                volume_ref['migration_status'].startswith('target:'))
+            self._notify_about_volume_usage(context, volume_ref, "delete.start")
+            try:
+                # NOTE(flaper87): Verify the driver is enabled
+                # before going forward. The exception will be caught
+                # and the volume status updated.
+                utils.require_driver_initialized(self.driver)
+
+                self.driver.remove_export(context, volume_ref)
+                if unmanage_only:
+                    self.driver.unmanage(volume_ref)
+                else:
+                    self.driver.delete_volume(volume_ref)
+            except exception.VolumeIsBusy:
+                LOG.error(_LE("Unable to delete busy volume."),
+                          resource=volume_ref)
+                # If this is a destination volume, we have to clear the database
+                # record to avoid user confusion.
                 self._clear_db(context, is_migrating_dest, volume_ref,
-                               'error_deleting')
-
-        # If deleting source/destination volume in a migration, we should
-        # skip quotas.
-        if not is_migrating:
-            # Get reservations
-            try:
-                reserve_opts = {'volumes': -1,
-                                'gigabytes': -volume_ref['size']}
-                QUOTAS.add_volume_type_opts(context,
-                                            reserve_opts,
-                                            volume_ref.get('volume_type_id'))
-                reservations = QUOTAS.reserve(context,
-                                              project_id=project_id,
-                                              **reserve_opts)
+                               'available')
+                return True
             except Exception:
-                reservations = None
-                LOG.exception(_LE("Failed to update usages deleting volume."),
-                              resource=volume_ref)
+                with excutils.save_and_reraise_exception():
+                    # If this is a destination volume, we have to clear the
+                    # database record to avoid user confusion.
+                    self._clear_db(context, is_migrating_dest, volume_ref,
+                                   'error_deleting')
 
-        # If deleting the source volume in a migration, we should skip database
-        # update here. In other cases, continue to update database entries.
-        if not is_migrating or is_migrating_dest:
+            # If deleting source/destination volume in a migration, we should
+            # skip quotas.
+            if not is_migrating:
+                # Get reservations
+                try:
+                    reserve_opts = {'volumes': -1,
+                                    'gigabytes': -volume_ref['size']}
+                    QUOTAS.add_volume_type_opts(
+                        context, reserve_opts, volume_ref.get('volume_type_id'))
+                    reservations = QUOTAS.reserve(
+                        context, project_id=project_id, **reserve_opts)
+                except Exception:
+                    reservations = None
+                    LOG.exception(
+                        _LE("Failed to update usages deleting volume."),
+                        resource=volume_ref)
 
-            # Delete glance metadata if it exists
-            self.db.volume_glance_metadata_delete_by_volume(context, volume_id)
+            # If deleting the source volume in a migration, we should skip
+            # database update here. In other cases, continue to update
+            # database entries.
+            if not is_migrating or is_migrating_dest:
 
-            self.db.volume_destroy(context, volume_id)
+                # Delete glance metadata if it exists
+                self.db.volume_glance_metadata_delete_by_volume(
+                    context, volume_id)
 
-        # If deleting source/destination volume in a migration, we should
-        # skip quotas.
-        if not is_migrating:
-            self._notify_about_volume_usage(context, volume_ref, "delete.end")
+                self.db.volume_destroy(context, volume_id)
 
-            # Commit the reservations
-            if reservations:
-                QUOTAS.commit(context, reservations, project_id=project_id)
+            # If deleting source/destination volume in a migration, we should
+            # skip quotas.
+            if not is_migrating:
+                self._notify_about_volume_usage(
+                    context, volume_ref, "delete.end")
 
-            pool = vol_utils.extract_host(volume_ref['host'], 'pool')
-            if pool is None:
-                # Legacy volume, put them into default pool
-                pool = self.driver.configuration.safe_get(
-                    'volume_backend_name') or vol_utils.extract_host(
-                        volume_ref['host'], 'pool', True)
-            size = volume_ref['size']
+                # Commit the reservations
+                if reservations:
+                    QUOTAS.commit(context, reservations, project_id=project_id)
 
-            try:
-                self.stats['pools'][pool]['allocated_capacity_gb'] -= size
-            except KeyError:
-                self.stats['pools'][pool] = dict(
-                    allocated_capacity_gb=-size)
+                pool = vol_utils.extract_host(volume_ref['host'], 'pool')
+                if pool is None:
+                    # Legacy volume, put them into default pool
+                    pool = self.driver.configuration.safe_get(
+                        'volume_backend_name') or vol_utils.extract_host(
+                            volume_ref['host'], 'pool', True)
+                size = volume_ref['size']
 
-            self.publish_service_capabilities(context)
+                try:
+                    self.stats['pools'][pool]['allocated_capacity_gb'] -= size
+                except KeyError:
+                    self.stats['pools'][pool] = dict(
+                        allocated_capacity_gb=-size)
 
-        LOG.info(_LI("Deleted volume successfully."), resource=volume_ref)
-        return True
+                self.publish_service_capabilities(context)
+
+            LOG.info(_LI("Deleted volume successfully."), resource=volume_ref)
+            return True
 
     def _clear_db(self, context, is_migrating_dest, volume_ref, status):
         # This method is called when driver.unmanage() or
@@ -693,74 +624,75 @@ class VolumeManager(manager.SchedulerDependentManager):
                  resource=snapshot)
         return snapshot.id
 
-    @locked_snapshot_operation
     def delete_snapshot(self, context, snapshot):
         """Deletes and unexports snapshot."""
-        context = context.elevated()
-        project_id = snapshot.project_id
+        with COORDINATOR.get_lock("{}-delete_snapshot".format(snapshot.id)):
+            context = context.elevated()
+            project_id = snapshot.project_id
 
-        self._notify_about_snapshot_usage(
-            context, snapshot, "delete.start")
+            self._notify_about_snapshot_usage(
+                context, snapshot, "delete.start")
 
-        try:
-            # NOTE(flaper87): Verify the driver is enabled
-            # before going forward. The exception will be caught
-            # and the snapshot status updated.
-            utils.require_driver_initialized(self.driver)
+            try:
+                # NOTE(flaper87): Verify the driver is enabled
+                # before going forward. The exception will be caught
+                # and the snapshot status updated.
+                utils.require_driver_initialized(self.driver)
 
-            # Pass context so that drivers that want to use it, can,
-            # but it is not a requirement for all drivers.
-            snapshot.context = context
-            snapshot.save()
-
-            self.driver.delete_snapshot(snapshot)
-        except exception.SnapshotIsBusy:
-            LOG.error(_LE("Delete snapshot failed, due to snapshot busy."),
-                      resource=snapshot)
-            snapshot.status = 'available'
-            snapshot.save()
-            return True
-        except Exception:
-            with excutils.save_and_reraise_exception():
-                snapshot.status = 'error_deleting'
+                # Pass context so that drivers that want to use it, can,
+                # but it is not a requirement for all drivers.
+                snapshot.context = context
                 snapshot.save()
 
-        # Get reservations
-        try:
-            if CONF.no_snapshot_gb_quota:
-                reserve_opts = {'snapshots': -1}
-            else:
-                reserve_opts = {
-                    'snapshots': -1,
-                    'gigabytes': -snapshot.volume_size,
-                }
-            volume_ref = self.db.volume_get(context, snapshot.volume_id)
-            QUOTAS.add_volume_type_opts(context,
-                                        reserve_opts,
-                                        volume_ref.get('volume_type_id'))
-            reservations = QUOTAS.reserve(context,
-                                          project_id=project_id,
-                                          **reserve_opts)
-        except Exception:
-            reservations = None
-            LOG.exception(_LE("Update snapshot usages failed."),
+                self.driver.delete_snapshot(snapshot)
+            except exception.SnapshotIsBusy:
+                LOG.error(_LE("Delete snapshot failed, due to snapshot busy."),
                           resource=snapshot)
-        self.db.volume_glance_metadata_delete_by_snapshot(context, snapshot.id)
-        snapshot.destroy(context)
-        self._notify_about_snapshot_usage(context, snapshot, "delete.end")
+                snapshot.status = 'available'
+                snapshot.save()
+                return True
+            except Exception:
+                with excutils.save_and_reraise_exception():
+                    snapshot.status = 'error_deleting'
+                    snapshot.save()
 
-        # Commit the reservations
-        if reservations:
-            QUOTAS.commit(context, reservations, project_id=project_id)
-        LOG.info(_LI("Delete snapshot completed successfully"),
-                 resource=snapshot)
-        return True
+            # Get reservations
+            try:
+                if CONF.no_snapshot_gb_quota:
+                    reserve_opts = {'snapshots': -1}
+                else:
+                    reserve_opts = {
+                        'snapshots': -1,
+                        'gigabytes': -snapshot.volume_size,
+                    }
+                volume_ref = self.db.volume_get(context, snapshot.volume_id)
+                QUOTAS.add_volume_type_opts(context,
+                                            reserve_opts,
+                                            volume_ref.get('volume_type_id'))
+                reservations = QUOTAS.reserve(context,
+                                              project_id=project_id,
+                                              **reserve_opts)
+            except Exception:
+                reservations = None
+                LOG.exception(_LE("Update snapshot usages failed."),
+                              resource=snapshot)
+            self.db.volume_glance_metadata_delete_by_snapshot(
+                context, snapshot.id
+            )
+            snapshot.destroy(context)
+            self._notify_about_snapshot_usage(context, snapshot, "delete.end")
+
+            # Commit the reservations
+            if reservations:
+                QUOTAS.commit(context, reservations, project_id=project_id)
+            LOG.info(_LI("Delete snapshot completed successfully"),
+                     resource=snapshot)
+            return True
 
     def attach_volume(self, context, volume_id, instance_uuid, host_name,
                       mountpoint, mode):
         """Updates db to show volume is attached."""
-        @utils.synchronized(volume_id, external=True)
-        def do_attach():
+        with COORDINATOR.get_lock("{}-attach_volume".format(volume_id)):
             # check the volume status before attaching
             volume = self.db.volume_get(context, volume_id)
             volume_metadata = self.db.volume_admin_metadata_get(
@@ -845,87 +777,90 @@ class VolumeManager(manager.SchedulerDependentManager):
             LOG.info(_LI("Attach volume completed successfully."),
                      resource=volume)
             return self.db.volume_attachment_get(context, attachment_id)
-        return do_attach()
 
-    @locked_detach_operation
     def detach_volume(self, context, volume_id, attachment_id=None):
         """Updates db to show volume is detached."""
-        # TODO(vish): refactor this into a more general "unreserve"
-        volume = self.db.volume_get(context, volume_id)
-        attachment = None
-        if attachment_id:
-            try:
-                attachment = self.db.volume_attachment_get(context,
-                                                           attachment_id)
-            except exception.VolumeAttachmentNotFound:
-                LOG.error(_LE("Find attachment in detach_volume failed."),
-                          resource=volume)
-                raise
-        else:
-            # We can try and degrade gracefuly here by trying to detach
-            # a volume without the attachment_id here if the volume only has
-            # one attachment.  This is for backwards compatibility.
-            attachments = self.db.volume_attachment_get_used_by_volume_id(
-                context, volume_id)
-            if len(attachments) > 1:
-                # There are more than 1 attachments for this volume
-                # we have to have an attachment id.
-                msg = _("Detach volume failed: More than one attachment, "
-                        "but no attachment_id provided.")
-                LOG.error(msg, resource=volume)
-                raise exception.InvalidVolume(reason=msg)
-            elif len(attachments) == 1:
-                attachment = attachments[0]
-            else:
-                # there aren't any attachments for this volume.
-                msg = _("Detach volume failed, because there are currently no "
-                        "active attachments.")
-                LOG.error(msg, resource=volume)
-                raise exception.InvalidVolume(reason=msg)
-
-        self._notify_about_volume_usage(context, volume, "detach.start")
-        try:
-            # NOTE(flaper87): Verify the driver is enabled
-            # before going forward. The exception will be caught
-            # and the volume status updated.
-            utils.require_driver_initialized(self.driver)
-
-            self.driver.detach_volume(context, volume, attachment)
-        except Exception:
-            with excutils.save_and_reraise_exception():
-                self.db.volume_attachment_update(
-                    context, attachment.get('id'),
-                    {'attach_status': 'error_detaching'})
-
-        self.db.volume_detached(context.elevated(), volume_id,
-                                attachment.get('id'))
-        self.db.volume_admin_metadata_delete(context.elevated(), volume_id,
-                                             'attached_mode')
-
-        # NOTE(jdg): We used to do an ensure export here to
-        # catch upgrades while volumes were attached (E->F)
-        # this was necessary to convert in-use volumes from
-        # int ID's to UUID's.  Don't need this any longer
-
-        # We're going to remove the export here
-        # (delete the iscsi target)
-        volume = self.db.volume_get(context, volume_id)
-        try:
-            utils.require_driver_initialized(self.driver)
-            self.driver.remove_export(context.elevated(), volume)
-        except exception.DriverNotInitialized:
-            with excutils.save_and_reraise_exception():
-                LOG.exception(_LE("Detach volume failed, due to "
-                                  "uninitialized driver."),
+        with COORDINATOR.get_lock("{}-detach_volume".format(volume_id)):
+            # TODO(vish): refactor this into a more general "unreserve"
+            volume = self.db.volume_get(context, volume_id)
+            attachment = None
+            if attachment_id:
+                try:
+                    attachment = self.db.volume_attachment_get(context,
+                                                               attachment_id)
+                except exception.VolumeAttachmentNotFound:
+                    LOG.error(_LE("Find attachment in detach_volume failed."),
                               resource=volume)
-        except Exception as ex:
-            LOG.exception(_LE("Detach volume failed, due to "
-                              "remove-export failure."),
-                          resource=volume)
-            raise exception.RemoveExportException(volume=volume_id, reason=ex)
+                    raise
+            else:
+                # We can try and degrade gracefuly here by trying to detach
+                # a volume without the attachment_id here if the volume only has
+                # one attachment.  This is for backwards compatibility.
+                attachments = self.db.volume_attachment_get_used_by_volume_id(
+                    context, volume_id)
+                if len(attachments) > 1:
+                    # There are more than 1 attachments for this volume
+                    # we have to have an attachment id.
+                    msg = _("Detach volume failed: More than one attachment, "
+                            "but no attachment_id provided.")
+                    LOG.error(msg, resource=volume)
+                    raise exception.InvalidVolume(reason=msg)
+                elif len(attachments) == 1:
+                    attachment = attachments[0]
+                else:
+                    # there aren't any attachments for this volume.
+                    msg = _("Detach volume failed, because there are currently "
+                            "no active attachments.")
+                    LOG.error(msg, resource=volume)
+                    raise exception.InvalidVolume(reason=msg)
 
-        self._notify_about_volume_usage(context, volume, "detach.end")
-        LOG.info(_LI("Detach volume completed successfully."), resource=volume)
+            self._notify_about_volume_usage(context, volume, "detach.start")
+            try:
+                # NOTE(flaper87): Verify the driver is enabled
+                # before going forward. The exception will be caught
+                # and the volume status updated.
+                utils.require_driver_initialized(self.driver)
+
+                self.driver.detach_volume(context, volume, attachment)
+            except Exception:
+                with excutils.save_and_reraise_exception():
+                    self.db.volume_attachment_update(
+                        context, attachment.get('id'),
+                        {'attach_status': 'error_detaching'})
+
+            self.db.volume_detached(context.elevated(), volume_id,
+                                    attachment.get('id'))
+            self.db.volume_admin_metadata_delete(context.elevated(), volume_id,
+                                                 'attached_mode')
+
+            # NOTE(jdg): We used to do an ensure export here to
+            # catch upgrades while volumes were attached (E->F)
+            # this was necessary to convert in-use volumes from
+            # int ID's to UUID's.  Don't need this any longer
+
+            # We're going to remove the export here
+            # (delete the iscsi target)
+            volume = self.db.volume_get(context, volume_id)
+            try:
+                utils.require_driver_initialized(self.driver)
+                self.driver.remove_export(context.elevated(), volume)
+            except exception.DriverNotInitialized:
+                with excutils.save_and_reraise_exception():
+                    LOG.exception(_LE("Detach volume failed, due to "
+                                      "uninitialized driver."),
+                                  resource=volume)
+            except Exception as ex:
+                LOG.exception(
+                    _LE("Detach volume failed, due to remove-export failure."),
+                    resource=volume
+                )
+                raise exception.RemoveExportException(
+                    volume=volume_id, reason=ex
+                )
+
+            self._notify_about_volume_usage(context, volume, "detach.end")
+            LOG.info(_LI("Detach volume completed successfully."),
+                     resource=volume)
 
     def copy_volume_to_image(self, context, volume_id, image_meta):
         """Uploads the specified volume to Glance.
