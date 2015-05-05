@@ -21,6 +21,7 @@ import contextlib
 from oslo_concurrency import processutils
 from oslo_log import log as logging
 
+from cinder import coordination
 from cinder import exception
 from cinder.i18n import _LW, _LE
 from cinder import utils
@@ -71,6 +72,8 @@ class BlkioCgroup(Throttle):
                       {'name': cgroup_name})
             raise
 
+        coordination.COORDINATOR.start()
+
     def _get_device_number(self, path):
         try:
             return utils.get_blkdev_major_minor(path)
@@ -91,7 +94,7 @@ class BlkioCgroup(Throttle):
         for dev in devs:
             self._limit_bps(rw, dev, self.bps_limit * devs[dev] / total)
 
-    @utils.synchronized('BlkioCgroup')
+    @coordination.lock('BlkioCgroup')
     def _inc_device(self, srcdev, dstdev):
         if srcdev:
             self.srcdevs[srcdev] = self.srcdevs.get(srcdev, 0) + 1
@@ -100,7 +103,7 @@ class BlkioCgroup(Throttle):
             self.dstdevs[dstdev] = self.dstdevs.get(dstdev, 0) + 1
             self._set_limits('write', self.dstdevs)
 
-    @utils.synchronized('BlkioCgroup')
+    @coordination.lock('BlkioCgroup')
     def _dec_device(self, srcdev, dstdev):
         if srcdev:
             self.srcdevs[srcdev] -= 1

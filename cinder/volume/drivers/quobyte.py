@@ -22,11 +22,11 @@ from oslo_config import cfg
 from oslo_log import log as logging
 
 from cinder import compute
+from cinder import coordination
 from cinder import exception
 from cinder.i18n import _, _LI, _LW
 from cinder.image import image_utils
 from cinder.openstack.common import fileutils
-from cinder import utils
 from cinder.volume.drivers import remotefs as remotefs_drv
 
 VERSION = '1.0'
@@ -128,16 +128,16 @@ class QuobyteDriver(remotefs_drv.RemoteFSSnapDriver):
         return super(QuobyteDriver, self)._qemu_img_info_base(
             path, volume_name, self.configuration.quobyte_mount_point_base)
 
-    @utils.synchronized('quobyte', external=False)
+    @coordination.lock('quobyte')
     def create_cloned_volume(self, volume, src_vref):
         """Creates a clone of the specified volume."""
         self._create_cloned_volume(volume, src_vref)
 
-    @utils.synchronized('quobyte', external=False)
+    @coordination.lock('quobyte')
     def create_volume(self, volume):
         return super(QuobyteDriver, self).create_volume(volume)
 
-    @utils.synchronized('quobyte', external=False)
+    @coordination.lock('quobyte')
     def create_volume_from_snapshot(self, volume, snapshot):
         return self._create_volume_from_snapshot(volume, snapshot)
 
@@ -182,7 +182,7 @@ class QuobyteDriver(remotefs_drv.RemoteFSSnapDriver):
 
         self._set_rw_permissions_for_all(path_to_new_vol)
 
-    @utils.synchronized('quobyte', external=False)
+    @coordination.lock('quobyte')
     def delete_volume(self, volume):
         """Deletes a logical volume."""
 
@@ -208,18 +208,18 @@ class QuobyteDriver(remotefs_drv.RemoteFSSnapDriver):
         info_path = self._local_path_volume_info(volume)
         fileutils.delete_if_exists(info_path)
 
-    @utils.synchronized('quobyte', external=False)
+    @coordination.lock('quobyte')
     def create_snapshot(self, snapshot):
         """Apply locking to the create snapshot operation."""
 
         return self._create_snapshot(snapshot)
 
-    @utils.synchronized('quobyte', external=False)
+    @coordination.lock('quobyte')
     def delete_snapshot(self, snapshot):
         """Apply locking to the delete snapshot operation."""
         self._delete_snapshot(snapshot)
 
-    @utils.synchronized('quobyte', external=False)
+    @coordination.lock('quobyte')
     def initialize_connection(self, volume, connector):
         """Allow connection to connector and return connection info."""
 
@@ -247,12 +247,12 @@ class QuobyteDriver(remotefs_drv.RemoteFSSnapDriver):
             'mount_point_base': self.configuration.quobyte_mount_point_base
         }
 
-    @utils.synchronized('quobyte', external=False)
+    @coordination.lock('quobyte')
     def copy_volume_to_image(self, context, volume, image_service, image_meta):
         self._copy_volume_to_image(context, volume, image_service,
                                    image_meta)
 
-    @utils.synchronized('quobyte', external=False)
+    @coordination.lock('quobyte')
     def extend_volume(self, volume, size_gb):
         volume_path = self.local_path(volume)
         volume_filename = os.path.basename(volume_path)
@@ -317,7 +317,7 @@ class QuobyteDriver(remotefs_drv.RemoteFSSnapDriver):
         mount_path = self._get_mount_point_for_share(quobyte_volume)
         self._mount_quobyte(quobyte_volume, mount_path, ensure=True)
 
-    @utils.synchronized('quobyte_ensure', external=False)
+    @coordination.lock('quobyte_ensure')
     def _ensure_shares_mounted(self):
         """Mount the Quobyte volume.
 

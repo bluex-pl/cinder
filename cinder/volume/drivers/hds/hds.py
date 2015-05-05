@@ -25,9 +25,9 @@ from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import excutils
 
+from cinder import coordination
 from cinder import exception
 from cinder.i18n import _, _LE, _LI
-from cinder import utils
 from cinder.volume import driver
 from cinder.volume.drivers.hds import hus_backend
 
@@ -313,7 +313,7 @@ class HUSDriver(driver.ISCSIDriver):
         """Create an export. Moved to initialize_connection."""
         return
 
-    @utils.synchronized('hds_hus', external=True)
+    @coordination.lock('hds_hus', external=True)
     def create_volume(self, volume):
         """Create a LU on HUS."""
         service = self._get_service(volume)
@@ -333,7 +333,7 @@ class HUSDriver(driver.ISCSIDriver):
                      'sz': sz})
         return {'provider_location': lun}
 
-    @utils.synchronized('hds_hus', external=True)
+    @coordination.lock('hds_hus', external=True)
     def create_cloned_volume(self, dst, src):
         """Create a clone of a volume."""
         if src['size'] != dst['size']:
@@ -361,7 +361,7 @@ class HUSDriver(driver.ISCSIDriver):
                      'size': size})
         return {'provider_location': lun}
 
-    @utils.synchronized('hds_hus', external=True)
+    @coordination.lock('hds_hus', external=True)
     def extend_volume(self, volume, new_size):
         """Extend an existing volume."""
         (arid, lun) = _loc_info(volume['provider_location'])['id_lu']
@@ -377,7 +377,7 @@ class HUSDriver(driver.ISCSIDriver):
                   % {'lun': lun,
                      'size': new_size})
 
-    @utils.synchronized('hds_hus', external=True)
+    @coordination.lock('hds_hus', external=True)
     def delete_volume(self, volume):
         """Delete an LU on HUS."""
         prov_loc = volume['provider_location']
@@ -411,7 +411,7 @@ class HUSDriver(driver.ISCSIDriver):
         """Disconnect a volume from an attached instance."""
         return
 
-    @utils.synchronized('hds_hus', external=True)
+    @coordination.lock('hds_hus', external=True)
     def initialize_connection(self, volume, connector):
         """Map the created volume to connector['initiator']."""
         service = self._get_service(volume)
@@ -443,7 +443,7 @@ class HUSDriver(driver.ISCSIDriver):
         properties['volume_id'] = volume['id']
         return {'driver_volume_type': 'iscsi', 'data': properties}
 
-    @utils.synchronized('hds_hus', external=True)
+    @coordination.lock('hds_hus', external=True)
     def terminate_connection(self, volume, connector, **kwargs):
         """Terminate a connection to a volume."""
         info = _loc_info(volume['provider_location'])
@@ -463,7 +463,7 @@ class HUSDriver(driver.ISCSIDriver):
         self._update_vol_location(volume['id'], loc)
         return {'provider_location': loc}
 
-    @utils.synchronized('hds_hus', external=True)
+    @coordination.lock('hds_hus', external=True)
     def create_volume_from_snapshot(self, volume, snapshot):
         """Create a volume from a snapshot."""
         size = int(snapshot['volume_size']) * 1024
@@ -486,7 +486,7 @@ class HUSDriver(driver.ISCSIDriver):
                      'sz': sz})
         return {'provider_location': lun}
 
-    @utils.synchronized('hds_hus', external=True)
+    @coordination.lock('hds_hus', external=True)
     def create_snapshot(self, snapshot):
         """Create a snapshot."""
         source_vol = self._id_to_vol(snapshot['volume_id'])
@@ -509,7 +509,7 @@ class HUSDriver(driver.ISCSIDriver):
                      'size': size})
         return {'provider_location': lun}
 
-    @utils.synchronized('hds_hus', external=True)
+    @coordination.lock('hds_hus', external=True)
     def delete_snapshot(self, snapshot):
         """Delete a snapshot."""
         loc = snapshot['provider_location']
@@ -526,7 +526,7 @@ class HUSDriver(driver.ISCSIDriver):
         LOG.debug("LUN %s is deleted." % lun)
         return
 
-    @utils.synchronized('hds_hus', external=True)
+    @coordination.lock('hds_hus', external=True)
     def get_volume_stats(self, refresh=False):
         """Get volume stats. If 'refresh', run update the stats first."""
         if refresh:

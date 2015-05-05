@@ -15,7 +15,6 @@
 #    under the License.
 
 import hashlib
-import inspect
 import json
 import os
 import re
@@ -30,7 +29,7 @@ from oslo_utils import units
 from cinder import compute
 from cinder import db
 from cinder import exception
-from cinder import utils
+from cinder.coordination import COORDINATOR
 from cinder.i18n import _, _LE, _LI, _LW
 from cinder.image import image_utils
 from cinder.volume import driver
@@ -87,38 +86,6 @@ nas_opts = [
 
 CONF = cfg.CONF
 CONF.register_opts(nas_opts)
-
-
-def locked_volume_id_operation(f, external=False):
-    """Lock decorator for volume operations.
-
-       Takes a named lock prior to executing the operation. The lock is named
-       with the id of the volume. This lock can then be used
-       by other operations to avoid operation conflicts on shared volumes.
-
-       May be applied to methods of signature:
-          method(<self>, volume, *, **)
-    """
-
-    def lvo_inner1(inst, *args, **kwargs):
-        lock_tag = inst.driver_prefix
-        call_args = inspect.getcallargs(f, inst, *args, **kwargs)
-
-        if call_args.get('volume'):
-            volume_id = call_args['volume']['id']
-        elif call_args.get('snapshot'):
-            volume_id = call_args['snapshot']['volume']['id']
-        else:
-            err_msg = _('The decorated method must accept either a volume or '
-                        'a snapshot object')
-            raise exception.VolumeBackendAPIException(data=err_msg)
-
-        @utils.synchronized('%s-%s' % (lock_tag, volume_id),
-                            external=external)
-        def lvo_inner2():
-            return f(inst, *args, **kwargs)
-        return lvo_inner2()
-    return lvo_inner1
 
 
 class RemoteFSDriver(driver.VolumeDriver):
@@ -1403,32 +1370,36 @@ class RemoteFSSnapDriver(RemoteFSDriver):
             self._local_volume_dir(snapshot['volume']), file_to_delete)
         self._execute('rm', '-f', path_to_delete, run_as_root=True)
 
-    @locked_volume_id_operation
     def create_snapshot(self, snapshot):
         """Apply locking to the create snapshot operation."""
+        name = '{}-{}'.format(self.driver_prefix, snapshot['volume']['id'])
+        with COORDINATOR.get_lock(name):
+            return self._create_snapshot(snapshot)
 
-        return self._create_snapshot(snapshot)
-
-    @locked_volume_id_operation
     def delete_snapshot(self, snapshot):
         """Apply locking to the delete snapshot operation."""
 
-        return self._delete_snapshot(snapshot)
+        name = '{}-{}'.format(self.driver_prefix, snapshot['volume']['id'])
+        with COORDINATOR.get_lock(name):
+            return self._delete_snapshot(snapshot)
 
-    @locked_volume_id_operation
     def create_volume_from_snapshot(self, volume, snapshot):
-        return self._create_volume_from_snapshot(volume, snapshot)
 
-    @locked_volume_id_operation
+        name = '{}-{}'.format(self.driver_prefix, volume['id'])
+        with COORDINATOR.get_lock(name):
+            return self._create_volume_from_snapshot(volume, snapshot)
+
     def create_cloned_volume(self, volume, src_vref):
         """Creates a clone of the specified volume."""
-        return self._create_cloned_volume(volume, src_vref)
 
-    @locked_volume_id_operation
+        name = '{}-{}'.format(self.driver_prefix, volume['id'])
+        with COORDINATOR.get_lock(name):
+            return self._create_cloned_volume(volume, src_vref)
+
     def copy_volume_to_image(self, context, volume, image_service, image_meta):
         """Copy the volume to the specified image."""
 
-        return self._copy_volume_to_image(context,
-                                          volume,
-                                          image_service,
-                                          image_meta)
+        name = '{}-{}'.format(self.driver_prefix, volume['id'])
+        with COORDINATOR.get_lock(name):
+            return self._copy_volume_to_image(
+                context, volume, image_service, image_meta)

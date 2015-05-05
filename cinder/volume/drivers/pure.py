@@ -28,6 +28,7 @@ from oslo_log import log as logging
 from oslo_utils import excutils
 from oslo_utils import units
 
+from cinder import coordination
 from cinder import exception
 from cinder.i18n import _, _LE, _LI, _LW
 from cinder import utils
@@ -329,7 +330,7 @@ class PureISCSIDriver(san.SanISCSIDriver):
             }
         return username, password, initiator_updates
 
-    @utils.synchronized('PureISCSIDriver._connect', external=True)
+    @coordination.lock('PureISCSIDriver._connect', external=True)
     def _connect(self, volume, connector, initiator_data):
         """Connect the host and volume; return dict describing connection."""
         connection = None
