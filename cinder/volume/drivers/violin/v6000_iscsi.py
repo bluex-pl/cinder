@@ -40,11 +40,11 @@ from oslo_log import log as logging
 from oslo_utils import units
 
 from cinder import context
+from cinder import coordination
 from cinder.db.sqlalchemy import models
 from cinder import exception
 from cinder.i18n import _, _LE, _LI, _LW
 from cinder.openstack.common import loopingcall
-from cinder import utils
 from cinder.volume import driver
 from cinder.volume.drivers.san import san
 from cinder.volume.drivers.violin import v6000_common
@@ -214,7 +214,7 @@ class V6000ISCSIDriver(driver.ISCSIDriver):
             self._update_stats()
         return self.stats
 
-    @utils.synchronized('vmem-export')
+    @coordination.lock('vmem-export')
     def _create_iscsi_target(self, volume):
         """Creates a new target for use in exporting a lun.
 
@@ -259,7 +259,7 @@ class V6000ISCSIDriver(driver.ISCSIDriver):
 
         return self.array_info[random.randint(0, len(self.array_info) - 1)]
 
-    @utils.synchronized('vmem-export')
+    @coordination.lock('vmem-export')
     def _delete_iscsi_target(self, volume):
         """Deletes the iscsi target for a lun.
 
@@ -281,7 +281,7 @@ class V6000ISCSIDriver(driver.ISCSIDriver):
             LOG.exception(_LE("Failed to delete iSCSI target!"))
             raise
 
-    @utils.synchronized('vmem-export')
+    @coordination.lock('vmem-export')
     def _export_lun(self, volume, connector=None, igroup=None):
         """Generates the export configuration for the given volume.
 
@@ -325,7 +325,7 @@ class V6000ISCSIDriver(driver.ISCSIDriver):
 
         return lun_id
 
-    @utils.synchronized('vmem-export')
+    @coordination.lock('vmem-export')
     def _unexport_lun(self, volume):
         """Removes the export configuration for the given volume.
 
@@ -352,7 +352,7 @@ class V6000ISCSIDriver(driver.ISCSIDriver):
             LOG.exception(_LE("LUN unexport for %s failed!"), volume['id'])
             raise
 
-    @utils.synchronized('vmem-export')
+    @coordination.lock('vmem-export')
     def _export_snapshot(self, snapshot, connector=None, igroup=None):
         """Generates the export configuration for the given snapshot.
 
@@ -401,7 +401,7 @@ class V6000ISCSIDriver(driver.ISCSIDriver):
 
         return lun_id
 
-    @utils.synchronized('vmem-export')
+    @coordination.lock('vmem-export')
     def _unexport_snapshot(self, snapshot):
         """Removes the export configuration for the given snapshot.
 

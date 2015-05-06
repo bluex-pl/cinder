@@ -43,10 +43,10 @@ from oslo_utils import excutils
 from oslo_utils import units
 
 from cinder import context
+from cinder import coordination
 from cinder import exception
 from cinder.i18n import _, _LE, _LW
 from cinder.openstack.common import loopingcall
-from cinder import utils
 from cinder.volume.drivers.ibm.storwize_svc import helpers as storwize_helpers
 from cinder.volume.drivers.ibm.storwize_svc import replication as storwize_rep
 from cinder.volume.drivers.san import san
@@ -322,7 +322,7 @@ class StorwizeSVCDriver(san.SanDriver):
                                               volume_metadata=volume_metadata)
 
     @fczm_utils.AddFCZone
-    @utils.synchronized('storwize-host', external=True)
+    @coordination.lock('storwize-host', external=True)
     def initialize_connection(self, volume, connector):
         """Perform the necessary work so that an iSCSI/FC connection can
         be made.
@@ -512,7 +512,7 @@ class StorwizeSVCDriver(san.SanDriver):
         return i_t_map
 
     @fczm_utils.RemoveFCZone
-    @utils.synchronized('storwize-host', external=True)
+    @coordination.lock('storwize-host', external=True)
     def terminate_connection(self, volume, connector, **kwargs):
         """Cleanup after an iSCSI connection has been terminated.
 

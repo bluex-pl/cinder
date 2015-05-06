@@ -35,6 +35,7 @@ from oslo_utils import units
 import six.moves.urllib.parse as urlparse
 
 from cinder import exception
+from cinder.coordination import COORDINATOR
 from cinder.i18n import _, _LE, _LI, _LW
 from cinder.image import image_utils
 from cinder import utils
@@ -261,26 +262,24 @@ class NetAppNfsDriver(nfs.NfsDriver):
 
     def _do_clone_rel_img_cache(self, src, dst, share, cache_file):
         """Do clone operation w.r.t image cache file."""
-        @utils.synchronized(cache_file, external=True)
-        def _do_clone():
+        with COORDINATOR.get_lock(cache_file, external=True):
             dir = self._get_mount_point_for_share(share)
             file_path = '%s/%s' % (dir, dst)
             if not os.path.exists(file_path):
                 LOG.info(_LI('Cloning from cache to destination %s'), dst)
                 self._clone_volume(src, dst, volume_id=None, share=share)
-        _do_clone()
 
-    @utils.synchronized('clean_cache')
     def _spawn_clean_cache_job(self):
         """Spawns a clean task if not running."""
-        if getattr(self, 'cleaning', None):
-            LOG.debug('Image cache cleaning in progress. Returning... ')
-            return
-        else:
-            # Set cleaning to True
-            self.cleaning = True
-            t = threading.Timer(0, self._clean_image_cache)
-            t.start()
+        with COORDINATOR.get_lock('clean_cache'):
+            if getattr(self, 'cleaning', None):
+                LOG.debug('Image cache cleaning in progress. Returning... ')
+                return
+            else:
+                # Set cleaning to True
+                self.cleaning = True
+                t = threading.Timer(0, self._clean_image_cache)
+                t.start()
 
     def _clean_image_cache(self):
         """Clean the image cache files in cache of space crunch."""
@@ -347,13 +346,10 @@ class NetAppNfsDriver(nfs.NfsDriver):
                     file_path = '%s/%s' % (mount_fs, f[0])
                     LOG.debug('Delete file path %s', file_path)
 
-                    @utils.synchronized(f[0], external=True)
-                    def _do_delete():
-                        if self._delete_file(file_path):
-                            return True
-                        return False
+                    with COORDINATOR.get_lock(f[0], external=True):
+                        deleted = self._delete_file(file_path)
 
-                    if _do_delete():
+                    if deleted:
                         bytes_to_free -= int(f[1])
                         if bytes_to_free <= 0:
                             return
@@ -634,16 +630,15 @@ class NetAppNfsDriver(nfs.NfsDriver):
     def _move_nfs_file(self, source_path, dest_path):
         """Moves source to destination."""
 
-        @utils.synchronized(dest_path, external=True)
-        def _move_file(src, dst):
-            if os.path.exists(dst):
-                LOG.warning(_LW("Destination %s already exists."), dst)
-                return False
-            self._execute('mv', src, dst, run_as_root=self._execute_as_root)
-            return True
-
         try:
-            return _move_file(source_path, dest_path)
+            with COORDINATOR.get_lock(dest_path, external=True):
+                if os.path.exists(dest_path):
+                    LOG.warning(_LW("Destination %s already exists."),
+                                dest_path)
+                    return False
+                self._execute('mv', source_path, dest_path,
+                              run_as_root=self._execute_as_root)
+                return True
         except Exception as e:
             LOG.warning(_LW('Exception moving file %(src)s. Message - %(e)s')
                         % {'src': source_path, 'e': e})

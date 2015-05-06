@@ -22,11 +22,11 @@ from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import units
 
+from cinder import coordination
 from cinder import exception
 from cinder.i18n import _
 from cinder.image import image_utils
 from cinder.openstack.common import fileutils
-from cinder import utils
 from cinder.volume.drivers import smbfs
 from cinder.volume.drivers.windows import remotefs
 from cinder.volume.drivers.windows import vhdutils
@@ -167,7 +167,7 @@ class WindowsSmbfsDriver(smbfs.SmbfsDriver):
     def _do_extend_volume(self, volume_path, size_gb, volume_name=None):
         self.vhdutils.resize_vhd(volume_path, size_gb * units.Gi)
 
-    @utils.synchronized('smbfs', external=False)
+    @coordination.lock('smbfs', external=False)
     def copy_volume_to_image(self, context, volume, image_service, image_meta):
         """Copy the volume to the specified image."""
 

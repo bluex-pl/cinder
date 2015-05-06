@@ -27,10 +27,10 @@ from oslo_log import log as logging
 from oslo_utils import units
 import six
 
+from cinder import coordination
 from cinder import exception
 from cinder.i18n import _, _LE, _LI, _LW
 from cinder.image import image_utils
-from cinder import utils
 from cinder.volume.drivers.netapp.dataontap.client import api as na_api
 from cinder.volume.drivers.netapp.dataontap.client import client_cmode
 from cinder.volume.drivers.netapp.dataontap import nfs_base
@@ -249,7 +249,7 @@ class NetAppCmodeNfsDriver(nfs_base.NetAppNfsDriver):
 
         return pools
 
-    @utils.synchronized('update_stale')
+    @coordination.lock('update_stale')
     def _update_stale_vols(self, volume=None, reset=False):
         """Populates stale vols with vol and returns set copy."""
         if volume:
@@ -259,7 +259,7 @@ class NetAppCmodeNfsDriver(nfs_base.NetAppNfsDriver):
             self.stale_vols.clear()
         return set_copy
 
-    @utils.synchronized("refresh_ssc_vols")
+    @coordination.lock("refresh_ssc_vols")
     def refresh_ssc_vols(self, vols):
         """Refreshes ssc_vols with latest entries."""
         if not self._mounted_shares:

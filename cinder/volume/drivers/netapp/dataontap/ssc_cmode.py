@@ -26,8 +26,8 @@ from oslo_utils import timeutils
 import six
 
 from cinder import exception
+from cinder.coordination import COORDINATOR
 from cinder.i18n import _, _LI, _LW
-from cinder import utils
 from cinder.volume.drivers.netapp.dataontap.client import api as netapp_api
 from cinder.volume.drivers.netapp import utils as na_utils
 
@@ -418,8 +418,7 @@ def refresh_cluster_stale_ssc(*args, **kwargs):
         if not job_set:
             return
 
-        @utils.synchronized(lock_pr)
-        def refresh_stale_ssc():
+        with COORDINATOR.get_lock(lock_pr):
             stale_vols = backend._update_stale_vols(reset=True)
             LOG.info(_LI('Running stale ssc refresh job for %(server)s'
                          ' and vserver %(vs)s')
@@ -458,8 +457,6 @@ def refresh_cluster_stale_ssc(*args, **kwargs):
             LOG.info(_LI('Successfully completed stale refresh job for'
                          ' %(server)s and vserver %(vs)s')
                      % {'server': na_server, 'vs': vserver})
-
-        refresh_stale_ssc()
     finally:
         na_utils.set_safe_attr(backend, 'refresh_stale_running', False)
 
@@ -480,8 +477,7 @@ def get_cluster_latest_ssc(*args, **kwargs):
         if not job_set:
             return
 
-        @utils.synchronized(lock_pr)
-        def get_latest_ssc():
+        with COORDINATOR.get_lock(lock_pr):
             LOG.info(_LI('Running cluster latest ssc job for %(server)s'
                          ' and vserver %(vs)s')
                      % {'server': na_server, 'vs': vserver})
@@ -491,8 +487,6 @@ def get_cluster_latest_ssc(*args, **kwargs):
             LOG.info(_LI('Successfully completed ssc job for %(server)s'
                          ' and vserver %(vs)s')
                      % {'server': na_server, 'vs': vserver})
-
-        get_latest_ssc()
     finally:
         na_utils.set_safe_attr(backend, 'ssc_job_running', False)
 

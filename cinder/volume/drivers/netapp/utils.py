@@ -30,9 +30,9 @@ from oslo_log import log as logging
 import six
 
 from cinder import context
+from cinder import coordination
 from cinder import exception
 from cinder.i18n import _, _LW, _LI
-from cinder import utils
 from cinder import version
 from cinder.volume import volume_types
 
@@ -82,7 +82,7 @@ def to_bool(val):
         return False
 
 
-@utils.synchronized("safe_set_attr")
+@coordination.lock("safe_set_attr")
 def set_safe_attr(instance, attr, val):
     """Sets the attribute in a thread safe manner.
 

@@ -28,6 +28,7 @@ from oslo_utils import units
 import six
 
 from cinder import context
+from cinder import coordination
 from cinder import exception
 from cinder.i18n import _, _LE, _LI, _LW
 from cinder.openstack.common import loopingcall
@@ -157,7 +158,7 @@ class RestCommon(object):
 
         return result['data']
 
-    @utils.synchronized('huawei', external=True)
+    @coordination.lock('huawei', external=True)
     def create_volume(self, volume):
 
         poolinfo = self._find_pool_info()
@@ -224,7 +225,7 @@ class RestCommon(object):
 
         return volume_size
 
-    @utils.synchronized('huawei', external=True)
+    @coordination.lock('huawei', external=True)
     def delete_volume(self, volume):
         """Delete a volume.
 
@@ -368,7 +369,7 @@ class RestCommon(object):
 
         return result['data']
 
-    @utils.synchronized('huawei', external=True)
+    @coordination.lock('huawei', external=True)
     def create_snapshot(self, snapshot):
         snapshot_info = self._create_snapshot(snapshot)
         snapshot_id = snapshot_info['ID']
@@ -399,7 +400,7 @@ class RestCommon(object):
         result = self.call(url, data, "DELETE")
         self._assert_rest_result(result, 'Delete snapshot error.')
 
-    @utils.synchronized('huawei', external=True)
+    @coordination.lock('huawei', external=True)
     def delete_snapshot(self, snapshot):
         snapshot_name = self._encode_name(snapshot['id'])
         volume_name = self._encode_name(snapshot['volume_id'])
@@ -709,7 +710,7 @@ class RestCommon(object):
             if self._is_initiator_associated_to_host(initiator_name) is False:
                 self._associate_initiator_to_host(initiator_name, hostid)
 
-    @utils.synchronized('huawei', external=True)
+    @coordination.lock('huawei', external=True)
     def initialize_connection_iscsi(self, volume, connector):
         """Map a volume to a host and return target iSCSI information."""
 
@@ -761,7 +762,7 @@ class RestCommon(object):
                  % properties)
         return {'driver_volume_type': 'iscsi', 'data': properties}
 
-    @utils.synchronized('huawei', external=True)
+    @coordination.lock('huawei', external=True)
     def initialize_connection_fc(self, volume, connector):
         wwns = connector['wwpns']
         host_name = connector['host']
@@ -1149,7 +1150,7 @@ class RestCommon(object):
             return lunnum
         return None
 
-    @utils.synchronized('huawei', external=True)
+    @coordination.lock('huawei', external=True)
     def terminate_connection_iscsi(self, volume, connector):
         """Delete map between a volume and a host."""
         initiator_name = connector['initiator']
@@ -1580,7 +1581,7 @@ class RestCommon(object):
 
         return target_iqn
 
-    @utils.synchronized('huawei', external=True)
+    @coordination.lock('huawei', external=True)
     def extend_volume(self, volume, new_size):
         """Extends a Huawei volume."""
 

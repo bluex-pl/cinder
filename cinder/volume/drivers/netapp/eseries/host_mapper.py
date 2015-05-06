@@ -19,9 +19,9 @@ Groups.
 from oslo_log import log as logging
 from six.moves import xrange
 
+from cinder import coordination
 from cinder import exception
 from cinder.i18n import _
-from cinder import utils as cinder_utils
 from cinder.volume.drivers.netapp.eseries import exception as eseries_exc
 from cinder.volume.drivers.netapp.eseries import utils
 
@@ -29,7 +29,7 @@ from cinder.volume.drivers.netapp.eseries import utils
 LOG = logging.getLogger(__name__)
 
 
-@cinder_utils.synchronized('map_es_volume')
+@coordination.lock('map_es_volume')
 def map_volume_to_single_host(client, volume, eseries_vol, host,
                               vol_map):
     """Maps the e-series volume to host with initiator."""
@@ -81,7 +81,7 @@ def map_volume_to_single_host(client, volume, eseries_vol, host,
     raise exception.NetAppDriverException(msg % volume['id'])
 
 
-@cinder_utils.synchronized('map_es_volume')
+@coordination.lock('map_es_volume')
 def map_volume_to_multiple_hosts(client, volume, eseries_vol, target_host,
                                  mapping):
     """Maps the e-series volume to multiattach host group."""

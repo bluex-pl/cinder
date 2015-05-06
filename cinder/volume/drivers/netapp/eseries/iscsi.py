@@ -30,10 +30,10 @@ from oslo_utils import excutils
 from oslo_utils import units
 import six
 
+from cinder import coordination
 from cinder import exception
 from cinder.i18n import _, _LE, _LI, _LW
 from cinder.openstack.common import loopingcall
-from cinder import utils as cinder_utils
 from cinder.volume import driver
 from cinder.volume.drivers.netapp.eseries import client
 from cinder.volume.drivers.netapp.eseries import exception as eseries_exc
@@ -783,7 +783,7 @@ class NetAppEseriesISCSIDriver(driver.ISCSIDriver):
         self._stats = data
         self._garbage_collect_tmp_vols()
 
-    @cinder_utils.synchronized("netapp_update_ssc_info", external=False)
+    @coordination.lock("netapp_update_ssc_info", external=False)
     def _update_ssc_info(self):
         """Periodically runs to update ssc information from the backend.
 
@@ -899,7 +899,7 @@ class NetAppEseriesISCSIDriver(driver.ISCSIDriver):
         finally:
             na_utils.set_safe_attr(self, 'clean_job_running', False)
 
-    @cinder_utils.synchronized('manage_existing')
+    @coordination.lock('manage_existing')
     def manage_existing(self, volume, existing_ref):
         """Brings an existing storage object under Cinder management."""
         vol = self._get_existing_vol_with_manage_ref(volume, existing_ref)

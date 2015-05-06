@@ -39,10 +39,10 @@ from oslo_log import log as logging
 from oslo_utils import units
 
 from cinder import context
+from cinder import coordination
 from cinder.db.sqlalchemy import models
 from cinder import exception
 from cinder.i18n import _, _LE, _LI, _LW
-from cinder import utils
 from cinder.volume import driver
 from cinder.volume.drivers.san import san
 from cinder.volume.drivers.violin import v6000_common
@@ -204,7 +204,7 @@ class V6000FCDriver(driver.FibreChannelDriver):
             self._update_stats()
         return self.stats
 
-    @utils.synchronized('vmem-export')
+    @coordination.lock('vmem-export')
     def _export_lun(self, volume, connector=None, igroup=None):
         """Generates the export configuration for the given volume.
 
@@ -247,7 +247,7 @@ class V6000FCDriver(driver.FibreChannelDriver):
 
         return lun_id
 
-    @utils.synchronized('vmem-export')
+    @coordination.lock('vmem-export')
     def _unexport_lun(self, volume):
         """Removes the export configuration for the given volume.
 
@@ -274,7 +274,7 @@ class V6000FCDriver(driver.FibreChannelDriver):
             LOG.exception(_LE("LUN unexport for %s failed!"), volume['id'])
             raise
 
-    @utils.synchronized('vmem-export')
+    @coordination.lock('vmem-export')
     def _export_snapshot(self, snapshot, connector=None, igroup=None):
         """Generates the export configuration for the given snapshot.
 
@@ -321,7 +321,7 @@ class V6000FCDriver(driver.FibreChannelDriver):
 
         return lun_id
 
-    @utils.synchronized('vmem-export')
+    @coordination.lock('vmem-export')
     def _unexport_snapshot(self, snapshot):
         """Removes the export configuration for the given snapshot.
 

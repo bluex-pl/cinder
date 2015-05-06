@@ -35,10 +35,10 @@ from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import importutils
 
+from cinder import coordination
 from cinder import exception
 from cinder.i18n import _, _LE, _LW, _LI
 from cinder.openstack.common import loopingcall
-from cinder import utils
 
 LOG = logging.getLogger(__name__)
 
@@ -156,7 +156,7 @@ class V6000Common(object):
                             'usable space.')
                     raise exception.ViolinInvalidBackendConfig(reason=msg)
 
-    @utils.synchronized('vmem-lun')
+    @coordination.lock('vmem-lun')
     def _create_lun(self, volume):
         """Creates a new lun.
 
@@ -191,7 +191,7 @@ class V6000Common(object):
             LOG.warn(_LW("Lun create for %s failed!"), volume['id'])
             raise
 
-    @utils.synchronized('vmem-lun')
+    @coordination.lock('vmem-lun')
     def _delete_lun(self, volume):
         """Deletes a lun.
 
@@ -221,7 +221,7 @@ class V6000Common(object):
             LOG.exception(_LE("Lun delete for %s failed!"), volume['id'])
             raise
 
-    @utils.synchronized('vmem-lun')
+    @coordination.lock('vmem-lun')
     def _extend_lun(self, volume, new_size):
         """Extend an existing volume's size.
 
@@ -244,7 +244,7 @@ class V6000Common(object):
             LOG.exception(_LE("LUN extend for %s failed!"), volume['id'])
             raise
 
-    @utils.synchronized('vmem-snap')
+    @coordination.lock('vmem-snap')
     def _create_lun_snapshot(self, snapshot):
         """Creates a new snapshot for a lun.
 
@@ -271,7 +271,7 @@ class V6000Common(object):
                           snapshot['id'])
             raise
 
-    @utils.synchronized('vmem-snap')
+    @coordination.lock('vmem-snap')
     def _delete_lun_snapshot(self, snapshot):
         """Deletes an existing snapshot for a lun.
 
